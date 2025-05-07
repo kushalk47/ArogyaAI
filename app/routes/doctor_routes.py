@@ -107,7 +107,7 @@ if MedicalReportParser and chatbot_service:
 
 
 if WhisperModel:
-    WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "medium")
+    WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "base")
     WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
     WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "float16" if WHISPER_DEVICE == "cuda" else "int8")
     WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", None)
