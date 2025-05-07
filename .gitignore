@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.db
+*.pyo
+*.pyd
+.env
+venv/
+.env.*
+
+# FastAPI/UVicorn logs
+*.log
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs (if any)
+dist/
+build/
+
+# Tailwind output CSS (if generated outside static/)
+extra/
+extra/**
+
+# VSCode
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
