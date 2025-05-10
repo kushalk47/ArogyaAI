@@ -1,25 +1,14 @@
 # app/routes/appointment_route.py
-from fastapi import APIRouter, Request, Form, Depends, HTTPException, File, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Request, Form, Depends, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from datetime import datetime, timezone
 from typing import Optional, List
 from bson import ObjectId
 import logging
 import os
-import tempfile
-import google.generativeai as genai
-import re
-import torch
-from fastapi.concurrency import run_in_threadpool
-import anyio
-
-# Import Faster-Whisper
-try:
-    from faster_whisper import WhisperModel
-except ImportError:
-    logging.warning("Faster-Whisper not installed. Voice transcription will be disabled.")
-    WhisperModel = None
+import google.generativeai as genai  # Gemini API
+import re  # For cleaning Gemini response
 
 # Import models
 from app.models.appointment_models import Appointment
@@ -52,30 +41,11 @@ try:
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY environment variable not set.")
     genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')  # Consistent with patient_routes.py
     logger.info("Gemini API initialized successfully.")
 except Exception as e:
     logger.error(f"Failed to initialize Gemini API: {e}", exc_info=True)
     gemini_model = None
-
-# --- Initialize Whisper Model ---
-whisper_model: Optional[WhisperModel] = None
-if WhisperModel:
-    WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "tiny")
-    WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
-    WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "float16" if WHISPER_DEVICE == "cuda" else "int8")
-    WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", None)
-    try:
-        logger.info(f"Initializing Whisper model with device={WHISPER_DEVICE}, compute_type={WHISPER_COMPUTE_TYPE}")
-        whisper_model = WhisperModel(
-            WHISPER_MODEL_SIZE,
-            device=WHISPER_DEVICE,
-            compute_type=WHISPER_COMPUTE_TYPE
-        )
-        logger.info(f"Faster-Whisper model '{WHISPER_MODEL_SIZE}' loaded successfully on {WHISPER_DEVICE} with compute type {WHISPER_COMPUTE_TYPE}.")
-    except Exception as e:
-        logger.error(f"Error loading Faster-Whisper model '{WHISPER_MODEL_SIZE}' on {WHISPER_DEVICE}: {e}", exc_info=True)
-        whisper_model = None
 
 # --- Helper Dependency to get current *Patient* ---
 async def get_current_patient(current_user: dict = Depends(get_current_authenticated_user)):
@@ -120,7 +90,7 @@ async def predict_symptom_severity(medical_record: dict, reason: Optional[str], 
     """Uses Gemini to predict symptom severity based on medical record, reason, and patient notes."""
     if not gemini_model:
         logger.error("Gemini model not initialized.")
-        return "Unknown"
+        return "Unknown"  # Fallback if Gemini is unavailable
 
     # Format medical record for Gemini
     medical_info_str = f"""
@@ -144,6 +114,7 @@ Based on the following patient medical information, predict the severity of the 
     try:
         response = await gemini_model.generate_content_async(prompt)
         severity = response.text.strip()
+        # Validate the response
         valid_severities = ["Very Serious", "Moderate", "Normal"]
         if severity not in valid_severities:
             logger.warning(f"Invalid severity response from Gemini: {severity}")
@@ -151,62 +122,9 @@ Based on the following patient medical information, predict the severity of the 
         return severity
     except Exception as e:
         logger.error(f"Error predicting symptom severity with Gemini: {e}", exc_info=True)
-        return "Unknown"
+        return "Unknown"  # Fallback on error
 
-# --- Transcription Endpoint ---
-@appointment_router.post("/transcribe", response_class=JSONResponse)
-async def transcribe_symptoms(
-    audio_file: UploadFile = File(...),
-    current_patient: dict = Depends(get_current_patient)
-):
-    """Receives an audio file, transcribes it using Faster-Whisper, and returns the transcription."""
-    if not whisper_model:
-        logger.error("Whisper transcription model is not initialized.")
-        return JSONResponse({"transcription": "Voice transcription model is not loaded or available."}, status_code=503)
-
-    if not audio_file.filename:
-        logger.warning("No audio file uploaded for transcription.")
-        raise HTTPException(status_code=400, detail="No audio file uploaded.")
-
-    patient_id_str = str(current_patient["_id"])
-    logger.info(f"Patient {patient_id_str} received audio for transcription: {audio_file.filename}")
-
-    tmp_file_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{audio_file.filename}") as tmp_file:
-            file_content = await audio_file.read()
-            await anyio.to_thread.run_sync(tmp_file.write, file_content)
-            tmp_file_path = tmp_file.name
-
-        logger.info(f"Saved uploaded audio to temporary file: {tmp_file_path}")
-
-        segments_generator, info = await run_in_threadpool(
-            whisper_model.transcribe,
-            tmp_file_path,
-            beam_size=5,
-            language=WHISPER_LANGUAGE,
-            task="transcribe"
-        )
-
-        logger.info(f"Transcription completed for '{audio_file.filename}'. Info: language={info.language}, language_probability={info.language_probability:.4f}, duration={info.duration:.2f}s")
-
-        transcribed_text = "".join([segment.text for segment in segments_generator])
-        logger.info(f"Successfully transcribed audio for patient {patient_id_str}: {transcribed_text[:100]}...")
-        return JSONResponse({"transcription": transcribed_text.strip()})
-
-    except Exception as e:
-        logger.error(f"Error during Faster-Whisper transcription for patient {patient_id_str}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error during transcription: {e}")
-
-    finally:
-        if tmp_file_path and os.path.exists(tmp_file_path):
-            try:
-                os.remove(tmp_file_path)
-                logger.info(f"Cleaned up temporary audio file: {tmp_file_path}")
-            except OSError as e:
-                logger.warning(f"Error removing temporary file {tmp_file_path}: {e}")
-
-# --- Book Appointment Page (GET) ---
+# ---------------------- Patient Book Appointment & View Appointments Page (GET) ----------------------
 @appointment_router.get("/book-appointment", response_class=HTMLResponse)
 async def get_book_and_view_appointments_page(
     request: Request,
@@ -216,9 +134,13 @@ async def get_book_and_view_appointments_page(
     patient_id_str = str(current_patient["_id"])
 
     try:
+        # Fetch all doctors for the booking form
         doctors_cursor = db.doctors.find({})
         doctors_list_raw = await doctors_cursor.to_list(length=1000)
+
+        # Fetch the patient's appointments for the list section
         patient_appointments = await fetch_patient_appointments_with_doctor_names(patient_id_str)
+
     except Exception as e:
         logger.error(f"Error fetching data for combined page: {e}")
         return templates.TemplateResponse(
@@ -242,7 +164,7 @@ async def get_book_and_view_appointments_page(
         }
     )
 
-# --- Create Appointment (POST) ---
+# ---------------------- Create Appointment (POST) ----------------------
 @appointment_router.post("/book-appointment")
 async def create_appointment(
     request: Request,
@@ -352,7 +274,7 @@ async def create_appointment(
         "patient_notes": patient_notes,
         "status": "Scheduled",
         "gmeet_link": None,
-        "predicted_severity": predicted_severity,
+        "predicted_severity": predicted_severity,  # Store predicted severity
         "created_at": datetime.now(timezone.utc)
     }
 
