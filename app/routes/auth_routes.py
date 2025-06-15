@@ -1,154 +1,109 @@
 # app/routes/auth_routes.py
-import secrets # Import secrets if needed elsewhere, though sessions.py handles token generation now
-from datetime import datetime, timedelta, timezone # Added timezone
-from fastapi import APIRouter, Request, Form, Depends, HTTPException, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
-from passlib.hash import bcrypt
+import secrets
+from datetime import datetime, timedelta, timezone
+from fastapi import APIRouter, Request, Form, Depends, HTTPException, Response, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ValidationError
 from bson import ObjectId
-from typing import Optional, List
-from pathlib import Path
-import logging # Added logging
+from typing import Optional, List, Dict, Any
+import logging
 
-# Logging setup
+# Logging setup (keep this if you haven't set it in main.py)
 logger = logging.getLogger(__name__)
 
 # Import models from the 'app.models' package
-from app.models.patient_models import Patient, PatientCreate, PatientLogin, Name as PatientName, Address, EmergencyContact, MedicalRecord, Medication, Diagnosis, Prescription, Consultation, Report, Immunization
-from app.models.doctor_models import Doctor, DoctorLogin, Name as DoctorName
+from app.models.patient_models import Patient, PatientCreate
+from app.models.doctor_models import Doctor
 
 # Import db directly from the 'app.config' module where it is defined
-from app.config import db # Assuming 'db' is your Motor database client instance
+from app.config import db
 
 # Import sessions from the 'app.models' package
-# --- CORRECTED IMPORT: Ensure these constants and functions match sessions.py ---
 from app.models.sessions import create_user_session, delete_user_session, get_current_session, UserSession, SESSION_COOKIE_NAME, SESSION_EXPIRATION_MINUTES
-# --- END CORRECTED IMPORT ---
-
+from passlib.hash import bcrypt
 
 auth_router = APIRouter()
 
-# --- TEMPLATES PATH ---
-# Get the path of the current file (auth_routes.py is in app/routes)
-current_file_path = Path(__file__).resolve()
-# Go up one level to the 'routes' directory
-routes_dir = current_file_path.parent
-# Go up another level to the 'app' directory
-app_dir = routes_dir.parent
-# Construct the path to the 'templates' directory inside 'app'
-templates_dir_path = app_dir / "templates"
+# ---------------------- API Response Models ----------------------
 
-# Initialize Jinja2Templates with the correct path
-templates = Jinja2Templates(directory=templates_dir_path)
-# --- END TEMPLATES PATH ---
+class AuthResponse(BaseModel):
+    """
+    Standard response model for authentication operations.
+    """
+    success: bool
+    message: str
+    data: Optional[Dict[str, Any]] = None
+
+
+class UserSchema(BaseModel):
+    """
+    Schema for returning basic user information after login/signup.
+    """
+    id: str
+    email: str
+    user_type: str
+    name: Optional[Dict[str, str]] = None
 
 
 # ---------------------- Utility Functions ----------------------
 
 def hash_password(password: str) -> str:
-    # Ensure password is treated as bytes for bcrypt hashing
-    if isinstance(password, str):
-        password = password.encode('utf-8')
-    return bcrypt.hash(password).decode('utf-8') # Store hash as string
+   
+        return bcrypt.hash(password)
 
 def verify_password(raw_password: str, hashed_password: str) -> bool:
-    # Ensure hashed_password is a string; pymongo/motor might return it as bytes depending on how it was stored
-    if isinstance(hashed_password, bytes):
-        hashed_password = hashed_password.decode('utf-8')
-    # Ensure raw_password is treated as bytes for bcrypt verification
-    if isinstance(raw_password, str):
-        raw_password = raw_password.encode('utf-8')
+    
     return bcrypt.verify(raw_password, hashed_password)
 
 # Dependency to get the current authenticated user (Patient or Doctor)
-# This function fetches the user document using the user_id from the session
-# It returns the raw document dictionary if found, otherwise raises HTTPException(401).
 async def get_current_authenticated_user(request: Request):
-    # print("\n--- Inside get_current_authenticated_user ---") # Debug print
-    # Attempt to get the session from the cookie using the session module's function
-    # get_current_session is responsible for checking the cookie (which now holds the token),
-    # looking up the session by its *token* field, validating expiry, and potentially cleaning up expired sessions.
-    session: Optional[UserSession] = await get_current_session(request)
-    # print(f"Session object from get_current_session: {session}") # Debug print
+    logger.debug(f"DEBUG: get_current_authenticated_user - Raw cookies received: {request.cookies}")
 
-    # If no valid session is found by get_current_session, authentication fails
+    session: Optional[UserSession] = await get_current_session(request)
+
     if not session:
         logger.debug("No valid session found by get_current_session. Raising 401.")
         raise HTTPException(
-            status_code=401,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated: No valid session found.",
-            headers={"WWW-Authenticate": "Bearer"}, # Optional: Suggest Bearer auth scheme
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # If a session is found, try to fetch the corresponding user document
-    user_id_str = session.user_id # Get the user_id (string ObjectId) from the session object
+    user_id_str = session.user_id
     user_doc = None
     logger.debug(f"Session found. User ID from session: {user_id_str}, User Type: {session.user_type}")
 
-    # Attempt to find the user in the patients collection
-    if session.user_type == "patient":
-        try:
+    try:
+        object_id = ObjectId(user_id_str)
+        if session.user_type == "patient":
             logger.debug(f"Attempting to find patient with _id: {user_id_str}")
-            # Query by the string ID. MongoDB driver handles conversion to ObjectId
-            # Ensure the user_id stored in session is the string ObjectId of the user document
-            user_doc = await db.patients.find_one({"_id": ObjectId(user_id_str)})
+            user_doc = await db.patients.find_one({"_id": object_id})
             logger.debug(f"Patient document found: {user_doc is not None}")
-
-        except Exception as e:
-            # Log error if ObjectId conversion or DB query fails
-            logger.error(f"Error fetching patient {user_id_str}: {e}")
-            user_doc = None # Ensure user_doc is None on error
-
-
-    # If not found as a patient, attempt to find in the doctors collection
-    if not user_doc and session.user_type == "doctor":
-        try:
+        elif session.user_type == "doctor":
             logger.debug(f"Attempting to find doctor with _id: {user_id_str}")
-            user_doc = await db.doctors.find_one({"_id": ObjectId(user_id_str)})
+            user_doc = await db.doctors.find_one({"_id": object_id})
             logger.debug(f"Doctor document found: {user_doc is not None}")
-        except Exception as e:
-            # Log error if ObjectId conversion or DB query fails
-            logger.error(f"Error fetching doctor {user_id_str}: {e}")
-            user_doc = None # Ensure user_doc is None on error
+    except Exception as e:
+        logger.error(f"Error fetching user {user_id_str} of type {session.user_type}: {e}")
+        user_doc = None
 
-
-    # If a session was found but the user document is missing (e.g., user deleted)
-    # The dependency should just raise 401. Cookie cleanup happens in get_current_session.
     if not user_doc:
         logger.warning(f"User document not found for session user_id {user_id_str}. Session might be invalid.")
-        # Removed cookie deletion from dependency - get_current_session handles detection and cleanup
         raise HTTPException(
-            status_code=401,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated: User not found or session invalid.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # If user document is found, return it
     logger.debug("User document found. Authentication successful.")
     return user_doc
 
+# ---------------------- Signup Routes ----------------------
 
-# ---------------------- Signup Routes (Two Steps) ----------------------
-
-@auth_router.get("/signup", response_class=HTMLResponse)
-async def get_signup(request: Request):
-    # Check if user is already logged in
-    session = await get_current_session(request)
-    if session:
-        # Redirect based on user type if already logged in
-        if session.user_type == "doctor":
-            return RedirectResponse("/dashboard/", status_code=303)
-        else: # Assume patient or other types redirect to profile
-            return RedirectResponse("/profile/", status_code=303)
-
-
-    return templates.TemplateResponse("signup.html", {"request": request})
-
-@auth_router.post("/signup")
+@auth_router.post("/signup", response_model=AuthResponse)
 async def post_signup(
     request: Request,
-    response: Response, # Need response here to set the cookie
-    # ... (form parameters remain the same) ...
+    response: Response,
     first: str = Form(...),
     middle: Optional[str] = Form(None),
     last: str = Form(...),
@@ -176,20 +131,20 @@ async def post_signup(
 ):
     # Check if user already exists
     existing_patient = await db.patients.find_one({"email": email})
-    existing_doctor = await db.doctors.find_one({"email": email}) # Also check doctor emails
+    existing_doctor = await db.doctors.find_one({"email": email})
     if existing_patient or existing_doctor:
-        return templates.TemplateResponse("signup.html", {
-            "request": request,
-            "error": "Email already registered."
-        })
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=AuthResponse(success=False, message="Email already registered.").model_dump()
+        )
 
     patient_oid = ObjectId()
-    patient_id_str = str(patient_oid) # Get string representation of the user's ObjectId
+    patient_id_str = str(patient_oid)
 
     hashed_pw = hash_password(password)
 
     patient_data = {
-        "_id": patient_oid, # Store ObjectId in the user document
+        "_id": patient_oid,
         "name": {"first": first, "middle": middle, "last": last},
         "email": email,
         "phone_number": phone_number,
@@ -198,24 +153,27 @@ async def post_signup(
         "gender": gender,
         "address": {"street": street, "city": city, "state": state, "zip": zip, "country": country},
         "emergency_contact": {"name": emergency_name, "phone": emergency_phone, "relationship": emergency_relationship},
-        "registration_date": datetime.now(timezone.utc), # Use timezone-aware datetime
-        "user_type": "patient" # Explicitly store user type
+        "registration_date": datetime.now(timezone.utc),
+        "user_type": "patient"
     }
 
     try:
         insert_result = await db.patients.insert_one(patient_data)
         if not insert_result.inserted_id:
-            raise Exception("Failed to insert patient")
+            raise Exception("Failed to insert patient into database.")
         logger.info(f"Patient created with _id: {insert_result.inserted_id}")
     except Exception as e:
         logger.error(f"Database error during patient creation: {e}")
-        return templates.TemplateResponse("signup.html", {"request": request, "error": "Error saving patient details. Please try again."})
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=AuthResponse(success=False, message="Error saving patient details. Please try again.").model_dump()
+        )
 
     # --- Create Initial Medical Record (Step 2 Data) ---
     medical_record_data = {
         "_id": ObjectId(),
-        "patient_id": patient_id_str, # Link to the patient using their string ObjectId
-        "current_medications": [m.strip() for m in current_medications_text.split(',') if m.strip()] if current_medications_text else [], # Parse comma-separated strings into lists
+        "patient_id": patient_id_str,
+        "current_medications": [m.strip() for m in current_medications_text.split(',') if m.strip()] if current_medications_text else [],
         "diagnoses": [d.strip() for d in diagnoses_text.split(',') if d.strip()] if diagnoses_text else [],
         "prescriptions": [p.strip() for p in prescriptions_text.split(',') if p.strip()] if prescriptions_text else [],
         "consultation_history": [c.strip() for c in consultation_history_text.split(',') if c.strip()] if consultation_history_text else [],
@@ -229,72 +187,69 @@ async def post_signup(
         logger.info(f"Medical record created for patient ID: {patient_id_str}")
     except Exception as e:
         logger.error(f"Error saving medical record for patient {patient_id_str}: {e}")
-        # Consider deleting the patient document if medical record creation fails to avoid orphaned records
-
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=AuthResponse(success=False, message="Signup successful but failed to save medical record. Please contact support.").model_dump()
+        )
 
     # --- Automatic Login after Successful Signup ---
-    # Call create_user_session to create the session document and get the secure random token back
     try:
-        # create_user_session now returns the random session token
         session_token = await create_user_session(user_id=patient_id_str, user_type="patient")
         logger.info(f"Session created after signup for user {patient_id_str}. Token (first 8 chars): {session_token[:8]}...")
     except Exception as e:
         logger.error(f"Error creating session after signup for user {patient_id_str}: {e}")
-        # Redirect to login with error if session creation fails
-        return RedirectResponse("/auth/login?error=Signup successful but failed to create session.", status_code=303)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=AuthResponse(success=False, message="Signup successful but failed to create session. Please try logging in.").model_dump()
+        )
 
-    # Create the redirect response - Redirect directly to profile after successful signup and login
-    redirect_response = RedirectResponse("/profile/", status_code=303)
-
-    # Set the cookie directly on the redirect response object
-    # Use the session_token returned by create_user_session as the cookie value
-    redirect_response.set_cookie(
-        key=SESSION_COOKIE_NAME, # Use the constant from sessions.py
-        value=session_token,     # Use the returned token as the cookie value
-        httponly=True,           # Corrected typo
-        max_age=SESSION_EXPIRATION_MINUTES * 60, # max_age in seconds
+    # Set the cookie directly on the response object for successful signup & auto-login
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_token,
+        httponly=True,
+        max_age=SESSION_EXPIRATION_MINUTES * 60,
         path="/",
-        # --- CORRECTED: Set secure=True ONLY if the request is HTTPS ---
-        secure=request.url.scheme == "https",
-        # -------------------------------------------------------------
-        samesite="Lax"           # Recommended for CSRF protection
+        secure=False,  # Set to False for local HTTP testing. CHANGE TO TRUE FOR PRODUCTION HTTPS!
+        samesite="Lax"
     )
 
-    # Return the redirect response with the cookie set
-    return redirect_response
+    # Prepare user data for response, ensuring 'name' dictionary is clean
+    processed_name_for_response = {"first": first, "middle": middle, "last": last}
+    if processed_name_for_response.get('middle') is None:
+        processed_name_for_response['middle'] = ""
+    # Ensure all values are strings
+    for key, value in processed_name_for_response.items():
+        if value is None:
+            processed_name_for_response[key] = ""
+        elif not isinstance(value, str):
+            processed_name_for_response[key] = str(value)
+
+    user_data = UserSchema(
+        id=patient_id_str,
+        email=email,
+        user_type="patient",
+        name=processed_name_for_response
+    ).model_dump()
+
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=AuthResponse(success=True, message="Signup successful. Welcome!", data=user_data).model_dump(),
+        headers=response.headers # <-- ADDED THIS
+    )
 
 
 # ---------------------- Login Routes ----------------------
 
-@auth_router.get("/login", response_class=HTMLResponse)
-async def get_login(request: Request):
-    # Check if user is already logged in
-    session = await get_current_session(request)
-    if session:
-        # Redirect based on user type if already logged in
-        if session.user_type == "doctor":
-            return RedirectResponse("/dashboard/", status_code=303)
-        else: # Assume patient or other types redirect to profile
-            return RedirectResponse("/profile/", status_code=303)
-
-    # Get any query parameters like signup_success or error
-    signup_success = request.query_params.get("signup_success")
-    error_message = request.query_params.get("error")
-
-
-    return templates.TemplateResponse("login.html", {
-        "request": request,
-        "signup_success": signup_success is not None, # Pass boolean indicating success
-        "error": error_message # Pass error message if present
-    })
-
-@auth_router.post("/login")
+@auth_router.post("/login", response_model=AuthResponse)
 async def post_login(
     request: Request,
-    response: Response, # Need response here to set the cookie
+    response: Response,
     email: str = Form(...),
     password: str = Form(...)
 ):
+    logger.debug(f"DEBUG: /login - Raw cookies received: {request.cookies}")
+
     user_doc = None
     user_type = None
     user_id_str = None
@@ -304,93 +259,173 @@ async def post_login(
     if patient_doc and verify_password(password, patient_doc.get("password")):
         user_doc = patient_doc
         user_type = "patient"
-        user_id_str = str(user_doc["_id"]) # Get string ObjectId of the user document
-
+        user_id_str = str(user_doc["_id"])
 
     # If not patient, attempt to find doctor
     if not user_doc:
         doctor_doc = await db.doctors.find_one({"email": email})
-        # Assuming 'password' field exists in doctor document in DB
         if doctor_doc and verify_password(password, doctor_doc.get("password")):
             user_doc = doctor_doc
             user_type = "doctor"
-            user_id_str = str(user_doc["_id"]) # Get string ObjectId of the user document
-
+            user_id_str = str(user_doc["_id"])
 
     if not user_doc:
-        # Invalid credentials - redirect back to login with error message
         logger.warning(f"Failed login attempt for email: {email}")
-        return RedirectResponse("/auth/login?error=Invalid email or password.", status_code=303)
-
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content=AuthResponse(success=False, message="Invalid email or password.").model_dump()
+        )
 
     # --- Successful Login ---
-    # Call create_user_session to create the session document and get the secure random token back
     try:
-        # create_user_session now returns the random session token
         session_token = await create_user_session(user_id=user_id_str, user_type=user_type)
         logger.info(f"Session created after login for user {user_id_str}. Token (first 8 chars): {session_token[:8]}...")
     except Exception as e:
         logger.error(f"Error creating session after login for user {user_id_str}: {e}")
-        # Log error, redirect to login, maybe show a specific error message
-        return RedirectResponse("/auth/login?error=Login successful but failed to create session.", status_code=303)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=AuthResponse(success=False, message="Login successful but failed to create session. Please try again.").model_dump()
+        )
 
-    # --- Determine Redirect based on user_type ---
-    redirect_url = "/profile/" # Default for patients
-    if user_type == "doctor":
-        redirect_url = "/dashboard/" # Redirect doctors to the dashboard
-
-    # Create the redirect response
-    redirect_response = RedirectResponse(redirect_url, status_code=303)
-
-    # Set the cookie directly on the redirect response object
-    # Use the session_token returned by create_user_session as the cookie value
-    redirect_response.set_cookie(
+    # Set the cookie for successful login
+    response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_token,
         httponly=True,
         max_age=SESSION_EXPIRATION_MINUTES * 60,
         path="/",
-        secure=request.url.scheme == "https",
+        secure=False,  # Set to False for local HTTP testing. CHANGE TO TRUE FOR PRODUCTION HTTPS!
         samesite="Lax"
     )
 
-    # Return the redirect response with the cookie set
-    return redirect_response
+    # Removed the debug print line
+    # print(f"DEBUG: Response headers before sending: {response.headers}")
+
+    # Prepare user data for response, ensuring 'name' dictionary is clean
+    user_name_data = user_doc.get("name")
+    processed_name_data: Optional[Dict[str, str]] = None
+    if user_name_data:
+        # Create a mutable copy to modify
+        processed_name_data = user_name_data.copy()
+        if 'middle' not in processed_name_data or processed_name_data['middle'] is None:
+            processed_name_data['middle'] = ""
+        # Ensure all values in the dictionary are strings if the schema is Dict[str, str]
+        for key, value in processed_name_data.items():
+            if value is None:
+                processed_name_data[key] = ""
+            elif not isinstance(value, str):
+                processed_name_data[key] = str(value)
+
+    user_data = UserSchema(
+        id=user_id_str,
+        email=email,
+        user_type=user_type,
+        name=processed_name_data
+    ).model_dump()
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=AuthResponse(success=True, message="Login successful.", data=user_data).model_dump(),
+        headers=response.headers # <-- ADDED THIS
+    )
 
 
 # ---------------------- Logout ----------------------
 
-@auth_router.get("/logout")
+@auth_router.post("/logout", response_model=AuthResponse)
 async def logout(request: Request, response: Response):
-    # delete_user_session handles deleting the session from DB and the cookie
     await delete_user_session(request, response)
     logger.info("User logged out.")
-    # Redirect to login page
-    return RedirectResponse("/auth/login", status_code=303)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=AuthResponse(success=True, message="Logged out successfully.").model_dump()
+    )
 
 
-# Example of a protected route (requires session)
-# @auth_router.get("/dashboard")
-# async def dashboard(request: Request, current_user: dict = Depends(get_current_authenticated_user)):
-#     # get_current_authenticated_user will raise 401 if not authenticated
-#     # current_user is the raw user document (dict)
-#     user_name = current_user.get("name", {}).get("first", "User") # Accessing nested dict
-#     user_type = current_user.get("user_type", "Unknown") # Assuming user_type is stored in the user document or handle patient/doctor structure difference
+# --- Protected routes (Examples) ---
 
-#     # Example of rendering a template
-#     return templates.TemplateResponse("dashboard.html", {
-#         "request": request,
-#         "user_name": user_name,
-#         "user_type": user_type,
-#         "user_doc": current_user # Pass the full user document if needed
-#     })
+@auth_router.get("/dashboard", response_model=AuthResponse)
+async def dashboard(current_user: Dict[str, Any] = Depends(get_current_authenticated_user)):
+    user_name = current_user.get("name", {}).get("first", "User")
+    user_type = current_user.get("user_type", "Unknown")
 
-# Example of a route that checks authentication but doesn't require it (Optional)
-# @auth_router.get("/some-page")
-# async def some_page(request: Request, current_user: Optional[dict] = Depends(get_current_authenticated_user)):
-#     # current_user will be None if not authenticated, or the user doc if logged in
-#     if current_user:
-#         logger.debug(f"User {current_user.get('email')} is logged in.")
-#     else:
-#         logger.debug("User is not logged in.")
-#     return templates.TemplateResponse("some_page.html", {"request": request, "user": current_user}) # Pass user info to template
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=AuthResponse(
+            success=True,
+            message="Dashboard access granted.",
+            data={"user_name": user_name, "user_type": user_type, "user_details": current_user}
+        ).model_dump()
+    )
+
+@auth_router.get("/profile", response_model=AuthResponse)
+async def profile(current_user: Dict[str, Any] = Depends(get_current_authenticated_user)):
+    user_details = {
+        "id": str(current_user["_id"]),
+        "email": current_user["email"],
+        "user_type": current_user["user_type"],
+        "name": current_user.get("name"),
+        "phone_number": current_user.get("phone_number"),
+        "age": current_user.get("age"),
+        "gender": current_user.get("gender"),
+        "address": current_user.get("address"),
+        "emergency_contact": current_user.get("emergency_contact"),
+        "registration_date": current_user.get("registration_date")
+    }
+
+    # Process 'name' data within user_details for consistent output
+    if user_details.get("name"):
+        processed_profile_name = user_details["name"].copy()
+        if processed_profile_name.get('middle') is None:
+            processed_profile_name['middle'] = ""
+        for key, value in processed_profile_name.items():
+            if value is None:
+                processed_profile_name[key] = ""
+            elif not isinstance(value, str):
+                processed_profile_name[key] = str(value)
+        user_details['name'] = processed_profile_name
+
+
+    # If it's a patient, you might want to fetch and include medical records
+    if current_user["user_type"] == "patient":
+        medical_record = await db.medical_records.find_one({"patient_id": str(current_user["_id"])})
+        if medical_record:
+            # Convert ObjectId in medical_record to string
+            medical_record['_id'] = str(medical_record['_id'])
+            # Ensure reports within medical_record are processed for content
+            if medical_record.get("reports"):
+                updated_reports = []
+                for report_ref in medical_record["reports"]:
+                    if isinstance(report_ref, dict) and report_ref.get("content_id"):
+                        try:
+                            content_oid = ObjectId(report_ref["content_id"])
+                            report_content_doc = await db.report_contents.find_one({"_id": content_oid})
+
+                            if report_content_doc and report_content_doc.get("content"):
+                                report_with_content = report_ref.copy()
+                                report_with_content["description"] = report_content_doc["content"]
+                                if '_id' in report_with_content:
+                                    report_with_content['id'] = str(report_with_content['_id'])
+                                    del report_with_content['_id']
+                                if 'content_id' in report_with_content:
+                                    report_with_content['content_id'] = str(report_with_content['content_id'])
+                                updated_reports.append(report_with_content)
+                            else:
+                                logger.warning(f"Report content not found for content_id: {report_ref['content_id']}")
+                        except Exception as e: # Catch all exceptions including errors.InvalidId
+                            logger.warning(f"Invalid content_id format or error fetching report content for content_id {report_ref.get('content_id')}: {e}")
+                medical_record["reports"] = updated_reports
+            else:
+                medical_record["reports"] = [] # Ensure reports is an empty list if not present
+
+            user_details['medical_record'] = medical_record
+
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=AuthResponse(
+            success=True,
+            message="Profile data retrieved.",
+            data=user_details
+        ).model_dump()
+    )

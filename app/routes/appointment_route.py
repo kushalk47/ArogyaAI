@@ -1,14 +1,22 @@
 # app/routes/appointment_route.py
-from fastapi import APIRouter, Request, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Request, Form, Depends, HTTPException, File, UploadFile
+from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
 from typing import Optional, List
 from bson import ObjectId
 import logging
 import os
-import google.generativeai as genai  # Gemini API
-import re  # For cleaning Gemini response
+import tempfile
+import google.generativeai as genai
+import re
+from fastapi.concurrency import run_in_threadpool
+import anyio
+
+try:
+    from .doctor_routes import whisper_model, WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, WHISPER_LANGUAGE
+except ImportError as e:
+    logging.error(f"Failed to import whisper_model from doctor_routes.py: {e}. Voice transcription will be disabled.", exc_info=True)
+    whisper_model = None
 
 # Import models
 from app.models.appointment_models import Appointment
@@ -20,14 +28,6 @@ from app.config import db
 
 # Import authentication dependency
 from app.routes.auth_routes import get_current_authenticated_user
-
-# Setup templates path
-from pathlib import Path
-current_file_path = Path(__file__).resolve()
-routes_dir = current_file_path.parent
-app_dir = routes_dir.parent
-templates_dir_path = app_dir / "templates"
-templates = Jinja2Templates(directory=templates_dir_path)
 
 # Logging setup
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ try:
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY environment variable not set.")
     genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash')  # Consistent with patient_routes.py
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
     logger.info("Gemini API initialized successfully.")
 except Exception as e:
     logger.error(f"Failed to initialize Gemini API: {e}", exc_info=True)
@@ -53,6 +53,23 @@ async def get_current_patient(current_user: dict = Depends(get_current_authentic
     if current_user.get("user_type") != "patient":
         raise HTTPException(status_code=403, detail="Only patients can access this page.")
     return current_user
+
+# --- Recursive helper function to convert datetime objects to ISO format strings ---
+def convert_dates_to_iso(obj):
+    """
+    Recursively converts datetime objects within a dictionary or list to ISO format strings.
+    Handles ObjectId conversion to string as well.
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, ObjectId):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_dates_to_iso(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_dates_to_iso(elem) for elem in obj]
+    else:
+        return obj
 
 # --- Helper function to fetch patient's appointments with doctor names ---
 async def fetch_patient_appointments_with_doctor_names(patient_id_str: str):
@@ -76,12 +93,14 @@ async def fetch_patient_appointments_with_doctor_names(patient_id_str: str):
             else:
                 appointment_doc["doctor_name"] = "Unknown Doctor"
 
-            appointments_with_names.append(appointment_doc)
+            # Apply the recursive conversion
+            appointments_with_names.append(convert_dates_to_iso(appointment_doc))
 
         except Exception as doctor_fetch_error:
             logger.warning(f"Error fetching doctor for appointment {appointment_doc.get('_id')}: {doctor_fetch_error}")
             appointment_doc["doctor_name"] = "Error Doctor Fetch"
-            appointments_with_names.append(appointment_doc)
+            # Apply the recursive conversion even in error case for consistency
+            appointments_with_names.append(convert_dates_to_iso(appointment_doc))
 
     return appointments_with_names
 
@@ -90,7 +109,7 @@ async def predict_symptom_severity(medical_record: dict, reason: Optional[str], 
     """Uses Gemini to predict symptom severity based on medical record, reason, and patient notes."""
     if not gemini_model:
         logger.error("Gemini model not initialized.")
-        return "Unknown"  # Fallback if Gemini is unavailable
+        return "Unknown"
 
     # Format medical record for Gemini
     medical_info_str = f"""
@@ -114,7 +133,6 @@ Based on the following patient medical information, predict the severity of the 
     try:
         response = await gemini_model.generate_content_async(prompt)
         severity = response.text.strip()
-        # Validate the response
         valid_severities = ["Very Serious", "Moderate", "Normal"]
         if severity not in valid_severities:
             logger.warning(f"Invalid severity response from Gemini: {severity}")
@@ -122,52 +140,115 @@ Based on the following patient medical information, predict the severity of the 
         return severity
     except Exception as e:
         logger.error(f"Error predicting symptom severity with Gemini: {e}", exc_info=True)
-        return "Unknown"  # Fallback on error
+        return "Unknown"
 
-# ---------------------- Patient Book Appointment & View Appointments Page (GET) ----------------------
-@appointment_router.get("/book-appointment", response_class=HTMLResponse)
-async def get_book_and_view_appointments_page(
-    request: Request,
+# --- Transcription Endpoint ---
+@appointment_router.post("/transcribe", response_class=JSONResponse)
+async def transcribe_symptoms(
+    audio_file: UploadFile = File(...),
     current_patient: dict = Depends(get_current_patient)
 ):
-    """Renders the combined book appointment and view appointments page."""
+    """Receives an audio file, transcribes it using Faster-Whisper, and returns the transcription."""
+    if not whisper_model:
+        logger.error("Whisper transcription model is not initialized or imported correctly.")
+        return JSONResponse({"transcription": "Voice transcription model is not loaded or available."}, status_code=503)
+
+    if not audio_file.filename:
+        logger.warning("No audio file uploaded for transcription.")
+        raise HTTPException(status_code=400, detail="No audio file uploaded.")
+
+    patient_id_str = str(current_patient["_id"])
+    logger.info(f"Patient {patient_id_str} received audio for transcription: {audio_file.filename}")
+
+    tmp_file_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{audio_file.filename.split('.')[-1]}") as tmp_file:
+            file_content = await audio_file.read()
+            await anyio.to_thread.run_sync(tmp_file.write, file_content)
+            tmp_file_path = tmp_file.name
+
+        logger.info(f"Saved uploaded audio to temporary file: {tmp_file_path}")
+
+        # Use the imported whisper_model and WHISPER_LANGUAGE
+        segments_generator, info = await run_in_threadpool(
+            whisper_model.transcribe,
+            tmp_file_path,
+            beam_size=5,
+            language=WHISPER_LANGUAGE, # Use the imported language setting
+            task="transcribe"
+        )
+
+        logger.info(f"Transcription completed for '{audio_file.filename}'. Info: language={info.language}, language_probability={info.language_probability:.4f}, duration={info.duration:.2f}s")
+
+        transcribed_text = "".join([segment.text for segment in segments_generator])
+        logger.info(f"Successfully transcribed audio for patient {patient_id_str}: {transcribed_text[:100]}...")
+        return JSONResponse({"transcription": transcribed_text.strip()})
+
+    except Exception as e:
+        logger.error(f"Error during Faster-Whisper transcription for patient {patient_id_str}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error during transcription: {e}")
+
+    finally:
+        if tmp_file_path and os.path.exists(tmp_file_path):
+            try:
+                os.remove(tmp_file_path)
+                logger.info(f"Cleaned up temporary audio file: {tmp_file_path}")
+            except OSError as e:
+                logger.warning(f"Error removing temporary file {tmp_file_path}: {e}")
+
+# --- Book Appointment Page (GET) - Now returns JSON ---
+@appointment_router.get("/book-appointment", response_class=JSONResponse)
+async def get_book_and_view_appointments_page(
+    current_patient: dict = Depends(get_current_patient)
+):
+    """Returns JSON data for booking and viewing appointments."""
     patient_id_str = str(current_patient["_id"])
 
     try:
-        # Fetch all doctors for the booking form
         doctors_cursor = db.doctors.find({})
         doctors_list_raw = await doctors_cursor.to_list(length=1000)
+        
+        # Apply recursive conversion to doctors data
+        doctors_list_processed = convert_dates_to_iso(doctors_list_raw)
 
-        # Fetch the patient's appointments for the list section
         patient_appointments = await fetch_patient_appointments_with_doctor_names(patient_id_str)
+
+        # Apply recursive conversion to patient data
+        patient_data_for_response = convert_dates_to_iso(current_patient)
+        # Ensure _id is a string, as convert_dates_to_iso handles ObjectIds
+        patient_data_for_response["id"] = patient_data_for_response.get("_id", str(current_patient["_id"]))
+
 
     except Exception as e:
         logger.error(f"Error fetching data for combined page: {e}")
-        return templates.TemplateResponse(
-            "book_appointment.html",
+        # Ensure error response also converts dates if somehow present
+        error_patient_data = convert_dates_to_iso({
+            "id": str(current_patient["_id"]),
+            "username": current_patient.get("username"),
+            "email": current_patient.get("email"),
+            "user_type": current_patient.get("user_type")
+        })
+        return JSONResponse(
             {
-                "request": request,
                 "error": "Could not load page data.",
                 "doctors": [],
                 "appointments": [],
-                "patient": current_patient
-            }
+                "patient": error_patient_data
+            },
+            status_code=500
         )
 
-    return templates.TemplateResponse(
-        "book_appointment.html",
+    return JSONResponse(
         {
-            "request": request,
-            "doctors": doctors_list_raw,
+            "doctors": doctors_list_processed,
             "appointments": patient_appointments,
-            "patient": current_patient
+            "patient": patient_data_for_response
         }
     )
 
-# ---------------------- Create Appointment (POST) ----------------------
-@appointment_router.post("/book-appointment")
+# --- Create Appointment (POST) - Now returns JSON ---
+@appointment_router.post("/book-appointment", response_class=JSONResponse)
 async def create_appointment(
-    request: Request,
     current_patient: dict = Depends(get_current_patient),
     doctor_id: str = Form(...),
     appointment_date: str = Form(...),
@@ -175,7 +256,7 @@ async def create_appointment(
     reason: Optional[str] = Form(None),
     patient_notes: Optional[str] = Form(None),
 ):
-    """Handles the submission of the book appointment form, predicts symptom severity, and re-renders the page."""
+    """Handles the submission of the book appointment form and returns JSON response."""
     patient_id_str = str(current_patient["_id"])
 
     # Combine date and time strings into a datetime object
@@ -185,31 +266,21 @@ async def create_appointment(
         appointment_time_utc = appointment_dt.replace(tzinfo=timezone.utc)
     except ValueError as e:
         logger.warning(f"Date/time parsing error: {e}")
-        doctors_list_raw = await db.doctors.find({}).to_list(length=1000)
-        patient_appointments = await fetch_patient_appointments_with_doctor_names(patient_id_str)
-        return templates.TemplateResponse(
-            "book_appointment.html",
+        return JSONResponse(
             {
-                "request": request,
-                "error": "Invalid date or time format. Please use YYYY-MM-DD and HH:MM.",
-                "doctors": doctors_list_raw,
-                "appointments": patient_appointments,
-                "patient": current_patient
-            }
+                "error": "Invalid date or time format. Please useYYYY-MM-DD and HH:MM.",
+                "status": "failed"
+            },
+            status_code=400
         )
     except Exception as e:
         logger.error(f"Unexpected error during date/time processing: {e}")
-        doctors_list_raw = await db.doctors.find({}).to_list(length=1000)
-        patient_appointments = await fetch_patient_appointments_with_doctor_names(patient_id_str)
-        return templates.TemplateResponse(
-            "book_appointment.html",
+        return JSONResponse(
             {
-                "request": request,
                 "error": "An error occurred processing the date or time.",
-                "doctors": doctors_list_raw,
-                "appointments": patient_appointments,
-                "patient": current_patient
-            }
+                "status": "failed"
+            },
+            status_code=500
         )
 
     # Fetch patient’s medical record
@@ -269,13 +340,13 @@ async def create_appointment(
     appointment_data = {
         "patient_id": patient_id_str,
         "doctor_id": doctor_id,
-        "appointment_time": appointment_time_utc,
+        "appointment_time": appointment_time_utc.isoformat(), # Convert datetime to string
         "reason": reason,
         "patient_notes": patient_notes,
         "status": "Scheduled",
         "gmeet_link": None,
-        "predicted_severity": predicted_severity,  # Store predicted severity
-        "created_at": datetime.now(timezone.utc)
+        "predicted_severity": predicted_severity,
+        "created_at": datetime.now(timezone.utc).isoformat() # Convert datetime to string
     }
 
     try:
@@ -285,31 +356,24 @@ async def create_appointment(
             raise Exception("Failed to insert appointment into database.")
         logger.info(f"Appointment created with ID: {insert_result.inserted_id}, Predicted Severity: {predicted_severity}")
 
-    except Exception as e:
-        logger.error(f"Database error during appointment creation: {e}")
-        doctors_list_raw = await db.doctors.find({}).to_list(length=1000)
-        patient_appointments = await fetch_patient_appointments_with_doctor_names(patient_id_str)
-        return templates.TemplateResponse(
-            "book_appointment.html",
+        return JSONResponse(
             {
-                "request": request,
-                "error": f"Error booking appointment: {e}",
-                "doctors": doctors_list_raw,
-                "appointments": patient_appointments,
-                "patient": current_patient
-            }
+                "message": f"Appointment booked successfully! Predicted symptom severity: {predicted_severity}",
+                "appointment_id": str(insert_result.inserted_id),
+                "predicted_severity": predicted_severity,
+                "status": "success",
+                "appointment_time": appointment_time_utc.isoformat(), # Added for consistency in direct response
+                "created_at": datetime.now(timezone.utc).isoformat() # Added for consistency in direct response
+            },
+            status_code=201 # Created
         )
 
-    # Re-render the page after successful booking
-    doctors_list_raw = await db.doctors.find({}).to_list(length=1000)
-    patient_appointments = await fetch_patient_appointments_with_doctor_names(patient_id_str)
-    return templates.TemplateResponse(
-        "book_appointment.html",
-        {
-            "request": request,
-            "success_message": f"Appointment booked successfully! Predicted symptom severity: {predicted_severity}",
-            "doctors": doctors_list_raw,
-            "appointments": patient_appointments,
-            "patient": current_patient
-        }
-    )
+    except Exception as e:
+        logger.error(f"Database error during appointment creation: {e}")
+        return JSONResponse(
+            {
+                "error": f"Error booking appointment: {e}",
+                "status": "failed"
+            },
+            status_code=500
+        )
