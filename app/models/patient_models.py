@@ -78,7 +78,7 @@ class Medication(BaseModel):
     name: str
     dosage: str
     frequency: str
-    start_date: datetime
+    start_date: datetime=None
     end_date: Optional[datetime] = None
     notes: Optional[str] = None
 
