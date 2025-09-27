@@ -1,4 +1,4 @@
-# ⚕️ Arogya-AI: AI-Powered Healthcare Platform 🤖
+#  Arogya-AI: AI-Powered Healthcare Platform 
 
 > Arogya-AI is a scalable, secure, and modern healthcare platform that leverages Generative AI and robust backend microservices to streamline clinical workflows, patient-doctor interactions, and medical record management. [cite_start]It focuses on integrating advanced AI capabilities for real-time consultation support and automated clinical documentation[cite: 275, 276].
 
