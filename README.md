@@ -1,6 +1,19 @@
+Got it 👍 Thanks for clarifying!
+So this **Arogya AI** project is a **web application** (not just an API backend).
+
+That means:
+
+* The deployed version serves **HTML templates** (patient registration, booking, doctor dashboards, etc.).
+* API-style endpoints are still part of the code, but in the **web version they render Jinja2 templates**.
+* Instead of running heavy local models (Whisper, Qwen), you used **Gemini API** for LLM-based tasks in deployment.
+
+I’ve rewritten the README accordingly 👇
+
+---
+
 # Arogya AI – AI-powered Healthcare Platform
 
-> Hi, I'm Kushal K. This repository contains an AI-powered healthcare platform built with **FastAPI, MongoDB, LangChain, and Generative AI models**. The platform provides patient management, appointment scheduling, medical record retrieval, and AI-assisted features such as real-time consultation, health record summarization, and prescription generation.
+> Hi, I'm Kushal K. This repository contains an AI-powered healthcare **web application** built with **FastAPI, MongoDB, and Gemini API integration**. It allows patients to register, book appointments, and manage health records, while doctors can log in to view patient data, generate summaries, and assist in consultations.
 
 ---
 
@@ -13,9 +26,8 @@
 * [Routes (`routes/`)](#routes-routes)
 * [Models (`models/`)](#models-models)
 * [Configuration (`config.py`)](#configuration-configpy)
-* [AI & GenAI Integration](#ai--genai-integration)
+* [AI & Gemini API Integration](#ai--gemini-api-integration)
 * [Templates & Static Files](#templates--static-files)
-* [Example API Usage](#example-api-usage)
 * [Scalability and Enhancements](#scalability-and-enhancements)
 
 ---
@@ -25,6 +37,8 @@
 ```text
 ArogyaAI/
 ├── static/
+│   ├── css/
+│   └── js/
 ├── templates/
 │   ├── base.html
 │   ├── dashboard.html
@@ -56,10 +70,10 @@ ArogyaAI/
 * **Framework:** FastAPI
 * **Database:** MongoDB (NoSQL)
 * **Authentication & Security:** JWT-based authentication, session handling
-* **Deployment:** Docker + AWS EC2
-* **Frontend:** HTML (Jinja2 templates), Bootstrap for styling
+* **Deployment:** Docker + AWS EC2 / Render
+* **Frontend:** HTML (Jinja2 templates), Bootstrap
 * **Core Language:** Python
-* **GenAI Integration:** Whisper, Qwen 2.5B, LangChain
+* **GenAI Integration:** Gemini API (for summarization, chatbot, consultation assistance)
 
 ---
 
@@ -70,14 +84,13 @@ flowchart TD
     Patient[Patient User] -->|Registers/Books| FastAPI[FastAPI Backend]
     Doctor[Doctor User] -->|Login/Dashboard| FastAPI
     FastAPI --> MongoDB[(MongoDB Database)]
-    FastAPI --> GenAI[Generative AI Modules]
-    GenAI --> Whisper[Speech-to-Text]
-    GenAI --> Qwen[Qwen 2.5B Model]
-    GenAI --> LangChain[LangChain Pipelines]
+    FastAPI --> GeminiAPI[Gemini API - LLM Tasks]
+    GeminiAPI --> Summarizer[Medical Summarization]
+    GeminiAPI --> Chatbot[Consultation Support]
     FastAPI --> Templates[HTML Templates + Static Files]
 ```
 
-The platform integrates **traditional backend APIs** with **Generative AI modules** for real-time patient–doctor interaction and health data insights.
+This application integrates a **web interface** (Jinja2 templates) with **Gemini API** for AI-driven tasks such as consultation assistance, record summarization, and prescription drafting.
 
 ---
 
@@ -87,112 +100,42 @@ The platform integrates **traditional backend APIs** with **Generative AI module
 
 * Creates the FastAPI app.
 * Connects to **MongoDB**.
-* Loads routes (patient, doctor, AI).
-* Configures middleware (CORS, sessions, error handling).
+* Registers routes (patients, doctors, AI).
+* Configures middleware (sessions, error handling).
 
 ### Application Entrypoint (`main.py`)
 
-* Starts the FastAPI server.
-* Provides auto-generated Swagger UI for API testing.
-* Runs with Uvicorn for production deployment.
+* Runs the FastAPI server with Uvicorn.
+* Renders HTML templates instead of raw JSON responses.
+* Swagger UI is available but secondary since this is a **web app**.
 
 ### Routes (`routes/`)
 
-* **patient_routes.py** → Patient registration, booking appointments, fetching records.
-* **doctor_routes.py** → Doctor login, viewing dashboards, accessing patient records.
-* **ai_routes.py** → AI endpoints for summarization, speech-to-text, prescription generation.
+* **patient_routes.py** → Handles patient registration, booking, and record management (renders `patient_register.html`, `book_appointment.html`, etc.).
+* **doctor_routes.py** → Handles doctor login and dashboards (renders `doctor_login.html`, `dashboard.html`).
+* **ai_routes.py** → Provides AI-assisted features (summarization, chatbot responses) using Gemini API.
 
 ### Models (`models/`)
 
-MongoDB document models:
-
-* **Patient**: Stores patient profile, health data, history.
-* **Doctor**: Stores doctor credentials, specialization, appointments.
-* **Appointment**: Links patients with doctors, tracks schedule and status.
+* **Patient** → Stores patient profile and history.
+* **Doctor** → Stores doctor login and specialization.
+* **Appointment** → Manages scheduling and status.
 
 ### Configuration (`config.py`)
 
-* Loads MongoDB connection string, API keys, and environment variables.
-* Ensures secrets are read from `.env` file.
+* Loads MongoDB URI, Gemini API key, and secret keys from `.env`.
 
-### AI & GenAI Integration
+### AI & Gemini API Integration
 
-* **Whisper**: Converts doctor’s speech to text for prescriptions.
-* **Qwen 2.5B**: Handles NLP tasks such as summarization, triage responses.
-* **LangChain**: Orchestrates multi-step AI workflows (chatbot, record summarization).
+* **Gemini API** replaces local LLMs for deployment.
+* Supports **summarization of health records, chatbot consultation, and prescription drafting**.
+* Lightweight integration ensures it runs on cloud without heavy GPU requirements.
 
 ### Templates & Static Files
 
-* **templates/** → Frontend pages for patients and doctors.
+* **templates/** → HTML pages for doctors and patients.
 * **static/** → CSS, JS, and assets.
-* `base.html` used for template inheritance.
-
----
-
-## Example API Usage
-
-### 1. Register a Patient
-
-```http
-POST /patient/register
-Content-Type: application/json
-
-{
-  "name": "John Doe",
-  "age": 32,
-  "contact": "9876543210",
-  "history": "Diabetic"
-}
-```
-
-### 2. Book an Appointment
-
-```http
-POST /appointment/book
-Content-Type: application/json
-
-{
-  "patient_id": "64a91cfa8d2f",
-  "doctor_id": "64a91f43d9e1",
-  "date": "2025-09-30",
-  "time": "10:30 AM"
-}
-```
-
-### 3. AI Summarization of Records
-
-```http
-POST /ai/summarize
-Content-Type: application/json
-
-{
-  "record_text": "Patient has recurring headaches, prescribed paracetamol..."
-}
-```
-
-Response:
-
-```json
-{
-  "summary": "Patient experiences frequent headaches, currently treated with paracetamol."
-}
-```
-
-### 4. Speech-to-Text (Doctor Prescription)
-
-```http
-POST /ai/speech-to-text
-Content-Type: multipart/form-data
-(audio_file uploaded)
-```
-
-Response:
-
-```json
-{
-  "transcription": "Prescribe 500mg Paracetamol twice daily after meals."
-}
-```
+* Uses `base.html` for template inheritance.
 
 ---
 
@@ -200,16 +143,16 @@ Response:
 
 * **Scalability**:
 
-  * Built with FastAPI, async by default → high performance.
-  * MongoDB ensures horizontal scaling for patient/record data.
-  * AI components are modular and can be containerized separately.
+  * Built on FastAPI (async-ready).
+  * MongoDB allows horizontal scaling.
+  * AI tasks are offloaded to Gemini API.
 
 * **Enhancements Suggested**:
 
   * Add role-based access for admin/doctor/patient.
-  * Integrate real-time notifications via WebSockets.
-  * Add analytics dashboard with ML-driven health predictions.
-  * HIPAA/GDPR compliance for production deployment.
+  * Secure sensitive medical records (HIPAA/GDPR compliance).
+  * Add appointment reminders with email/SMS APIs.
+  * Extend AI consultation to multilingual support.
 
 ---
 
@@ -220,7 +163,7 @@ Response:
 * [Python 3.9+](https://www.python.org/downloads/) installed.
 * Virtual environment (`venv`) created.
 * MongoDB instance (local or Atlas).
-* Docker (optional, for deployment).
+* Gemini API key.
 
 ### Steps
 
@@ -240,11 +183,12 @@ Response:
    ```
 
 3. **Setup Environment Variables**
-   Create a `.env` file in the root folder:
+   Create a `.env` file:
 
    ```
    MONGO_URI=mongodb+srv://user:password@cluster/dbname
    SECRET_KEY=your_secret_key
+   GEMINI_API_KEY=your_gemini_api_key
    ```
 
 4. **Run the Application**
@@ -256,16 +200,25 @@ Response:
 5. **Access the Application**
 
    * User homepage: **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**
-   * API Docs: **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)**
+   * Patient registration: `/patient/register`
+   * Doctor login: `/doctor/login`
+   * Dashboard: `/dashboard`
 
 ---
+
+✨ With this setup, patients can book appointments and manage records, while doctors can use AI-assisted dashboards powered by Gemini API for efficient consultations.
+
+---
+
+Do you also want me to include **sample screenshots (patient booking, doctor dashboard, AI consultation)** section in the README for better presentation?
+
 This entire system is a robust, modern **AI-powered Backend Healthcare Platform** built on the **FastAPI** framework, using **MongoDB** for data storage and leveraging external APIs (**Google Gemini**) and local models (**Faster-Whisper**) for core clinical functionality.
 
 The key innovation is the seamless integration of Generative AI for automating tasks like symptom triage and voice transcription within a secure, multi-user (Patient/Doctor) API structure.
 
 -----
 
-## Project Directory Structure
+## Project Directory Structur
 
 The project follows a standard Python package structure, which makes it scalable and organized:
 
