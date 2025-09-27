@@ -1,3 +1,264 @@
+# Arogya AI – AI-powered Healthcare Platform
+
+> Hi, I'm Kushal K. This repository contains an AI-powered healthcare platform built with **FastAPI, MongoDB, LangChain, and Generative AI models**. The platform provides patient management, appointment scheduling, medical record retrieval, and AI-assisted features such as real-time consultation, health record summarization, and prescription generation.
+
+---
+
+## Core Components
+
+* [File Directory Structure](#file-directory-structure)
+* [Instructions to Run the Code](#instructions-to-run-the-code)
+* [Initialization (`__init__.py`)](#initialization-__init__py)
+* [Application Entrypoint (`main.py`)](#application-entrypoint-mainpy)
+* [Routes (`routes/`)](#routes-routes)
+* [Models (`models/`)](#models-models)
+* [Configuration (`config.py`)](#configuration-configpy)
+* [AI & GenAI Integration](#ai--genai-integration)
+* [Templates & Static Files](#templates--static-files)
+* [Example API Usage](#example-api-usage)
+* [Scalability and Enhancements](#scalability-and-enhancements)
+
+---
+
+## File Directory Structure
+
+```text
+ArogyaAI/
+├── static/
+├── templates/
+│   ├── base.html
+│   ├── dashboard.html
+│   ├── doctor_login.html
+│   ├── patient_register.html
+│   ├── book_appointment.html
+│   ├── records.html
+│   └── consultation.html
+├── routes/
+│   ├── patient_routes.py
+│   ├── doctor_routes.py
+│   └── ai_routes.py
+├── models/
+│   ├── patient.py
+│   ├── doctor.py
+│   └── appointment.py
+├── __init__.py
+├── main.py
+├── config.py
+├── requirements.txt
+├── Dockerfile
+└── README.md
+```
+
+---
+
+## Technology Stack
+
+* **Framework:** FastAPI
+* **Database:** MongoDB (NoSQL)
+* **Authentication & Security:** JWT-based authentication, session handling
+* **Deployment:** Docker + AWS EC2
+* **Frontend:** HTML (Jinja2 templates), Bootstrap for styling
+* **Core Language:** Python
+* **GenAI Integration:** Whisper, Qwen 2.5B, LangChain
+
+---
+
+## Project Architecture
+
+```mermaid
+flowchart TD
+    Patient[Patient User] -->|Registers/Books| FastAPI[FastAPI Backend]
+    Doctor[Doctor User] -->|Login/Dashboard| FastAPI
+    FastAPI --> MongoDB[(MongoDB Database)]
+    FastAPI --> GenAI[Generative AI Modules]
+    GenAI --> Whisper[Speech-to-Text]
+    GenAI --> Qwen[Qwen 2.5B Model]
+    GenAI --> LangChain[LangChain Pipelines]
+    FastAPI --> Templates[HTML Templates + Static Files]
+```
+
+The platform integrates **traditional backend APIs** with **Generative AI modules** for real-time patient–doctor interaction and health data insights.
+
+---
+
+## In-Depth Component Explanations
+
+### Initialization (`__init__.py`)
+
+* Creates the FastAPI app.
+* Connects to **MongoDB**.
+* Loads routes (patient, doctor, AI).
+* Configures middleware (CORS, sessions, error handling).
+
+### Application Entrypoint (`main.py`)
+
+* Starts the FastAPI server.
+* Provides auto-generated Swagger UI for API testing.
+* Runs with Uvicorn for production deployment.
+
+### Routes (`routes/`)
+
+* **patient_routes.py** → Patient registration, booking appointments, fetching records.
+* **doctor_routes.py** → Doctor login, viewing dashboards, accessing patient records.
+* **ai_routes.py** → AI endpoints for summarization, speech-to-text, prescription generation.
+
+### Models (`models/`)
+
+MongoDB document models:
+
+* **Patient**: Stores patient profile, health data, history.
+* **Doctor**: Stores doctor credentials, specialization, appointments.
+* **Appointment**: Links patients with doctors, tracks schedule and status.
+
+### Configuration (`config.py`)
+
+* Loads MongoDB connection string, API keys, and environment variables.
+* Ensures secrets are read from `.env` file.
+
+### AI & GenAI Integration
+
+* **Whisper**: Converts doctor’s speech to text for prescriptions.
+* **Qwen 2.5B**: Handles NLP tasks such as summarization, triage responses.
+* **LangChain**: Orchestrates multi-step AI workflows (chatbot, record summarization).
+
+### Templates & Static Files
+
+* **templates/** → Frontend pages for patients and doctors.
+* **static/** → CSS, JS, and assets.
+* `base.html` used for template inheritance.
+
+---
+
+## Example API Usage
+
+### 1. Register a Patient
+
+```http
+POST /patient/register
+Content-Type: application/json
+
+{
+  "name": "John Doe",
+  "age": 32,
+  "contact": "9876543210",
+  "history": "Diabetic"
+}
+```
+
+### 2. Book an Appointment
+
+```http
+POST /appointment/book
+Content-Type: application/json
+
+{
+  "patient_id": "64a91cfa8d2f",
+  "doctor_id": "64a91f43d9e1",
+  "date": "2025-09-30",
+  "time": "10:30 AM"
+}
+```
+
+### 3. AI Summarization of Records
+
+```http
+POST /ai/summarize
+Content-Type: application/json
+
+{
+  "record_text": "Patient has recurring headaches, prescribed paracetamol..."
+}
+```
+
+Response:
+
+```json
+{
+  "summary": "Patient experiences frequent headaches, currently treated with paracetamol."
+}
+```
+
+### 4. Speech-to-Text (Doctor Prescription)
+
+```http
+POST /ai/speech-to-text
+Content-Type: multipart/form-data
+(audio_file uploaded)
+```
+
+Response:
+
+```json
+{
+  "transcription": "Prescribe 500mg Paracetamol twice daily after meals."
+}
+```
+
+---
+
+## Scalability and Enhancements
+
+* **Scalability**:
+
+  * Built with FastAPI, async by default → high performance.
+  * MongoDB ensures horizontal scaling for patient/record data.
+  * AI components are modular and can be containerized separately.
+
+* **Enhancements Suggested**:
+
+  * Add role-based access for admin/doctor/patient.
+  * Integrate real-time notifications via WebSockets.
+  * Add analytics dashboard with ML-driven health predictions.
+  * HIPAA/GDPR compliance for production deployment.
+
+---
+
+## Instructions to Run the Code
+
+### Prerequisites
+
+* [Python 3.9+](https://www.python.org/downloads/) installed.
+* Virtual environment (`venv`) created.
+* MongoDB instance (local or Atlas).
+* Docker (optional, for deployment).
+
+### Steps
+
+1. **Clone the Repository**
+
+   ```bash
+   git clone https://github.com/kushalk47/arogya-ai
+   cd arogya-ai
+   ```
+
+2. **Create Virtual Environment & Install Dependencies**
+
+   ```bash
+   python -m venv venv
+   source venv/bin/activate   # On Windows: venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+3. **Setup Environment Variables**
+   Create a `.env` file in the root folder:
+
+   ```
+   MONGO_URI=mongodb+srv://user:password@cluster/dbname
+   SECRET_KEY=your_secret_key
+   ```
+
+4. **Run the Application**
+
+   ```bash
+   uvicorn main:app --reload
+   ```
+
+5. **Access the Application**
+
+   * User homepage: **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**
+   * API Docs: **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)**
+
+---
 This entire system is a robust, modern **AI-powered Backend Healthcare Platform** built on the **FastAPI** framework, using **MongoDB** for data storage and leveraging external APIs (**Google Gemini**) and local models (**Faster-Whisper**) for core clinical functionality.
 
 The key innovation is the seamless integration of Generative AI for automating tasks like symptom triage and voice transcription within a secure, multi-user (Patient/Doctor) API structure.
@@ -80,67 +341,3 @@ The `patient_models.py` file defines the Pydantic schemas that enforce data type
 
 
 
-#  Arogya-AI: AI-Powered Healthcare Platform 
-
-> Arogya-AI is a scalable, secure, and modern healthcare platform that leverages Generative AI and robust backend microservices to streamline clinical workflows, patient-doctor interactions, and medical record management. [cite_start]It focuses on integrating advanced AI capabilities for real-time consultation support and automated clinical documentation[cite: 275, 276].
-
-***
-
-## Technology Stack
-
-* [cite_start]**Backend Framework:** **FastAPI** (for high performance and async capabilities) [cite: 79]
-* [cite_start]**Database:** **MongoDB** (used for flexible document storage) [cite: 77]
-* [cite_start]**Generative AI/LLMs:** **Gemini 1.5 Flash** (for severity prediction) [cite: 88][cite_start], **Qwen 2.5B** [cite: 275][cite_start], **LangChain** [cite: 275]
-* [cite_start]**Speech Recognition:** **Faster-Whisper** (for audio transcription) [cite: 93]
-* [cite_start]**APIs:** **RESTful APIs** [cite: 273][cite_start], Integrated third-party healthcare APIs [cite: 274]
-* [cite_start]**Deployment:** **AWS EC2** [cite: 274][cite_start], **Docker** [cite: 274][cite_start], **Render** [cite: 272]
-* **Core Language:** **Python**
-
-***
-
-## Core Components and Architecture
-
-The platform is structured around a multi-layered, microservice-inspired architecture, designed for scalability and clear separation of concerns.
-
-1.  [cite_start]**Backend Services:** Built with **FastAPI** to handle high-performance, asynchronous operations[cite: 79].
-2.  [cite_start]**Authentication/Sessions:** Secure user authentication for both **Patients** and **Doctors** using **hashed passwords** and **server-side session tokens** managed in the database[cite: 121, 122, 124, 131, 142].
-3.  [cite_start]**Data Models:** Pydantic models define data integrity and structure for all database interactions (e.g., `Patient`, `MedicalRecord`)[cite: 175, 179].
-4.  **Generative AI Integrations:**
-    * [cite_start]**Symptom Triage:** Uses the **Gemini API** to predict symptom severity ('Very Serious', 'Moderate', 'Normal') during appointment booking[cite: 88, 91, 114].
-    * [cite_start]**Transcription:** Uses the **Faster-Whisper** model for real-time transcription of audio consultations[cite: 93].
-5.  [cite_start]**Deployment:** Deployed on **AWS EC2** with **Docker** for guaranteed **24/7 uptime**[cite: 274].
-
-***
-
-## API Routes Explanation
-
-The backend routes are organized by their function (`auth_routes`, `appointment_routes`, `profile`).
-
-### **1. Authentication Routes (`auth_routes.py`)**
-
-Handles user creation, login, session management, and protected access.
-
-| Method | Endpoint | Description | Key Functionality |
-| :--- | :--- | :--- | :--- |
-| **POST** | `/signup` | [cite_start]Registers a new patient user, creates an initial **Medical Record**, automatically logs the user in, and sets a session cookie[cite: 131, 134, 135, 137]. |
-| **POST** | `/login` | Authenticates a user (Patient or Doctor). [cite_start]Creates a secure, HTTP-only session cookie upon success[cite: 142, 144]. |
-| **POST** | `/logout` | [cite_start]Deletes the user session from the database and removes the session cookie from the browser[cite: 149, 207]. |
-| **GET** | `/dashboard`, `/profile` | [cite_start]Protected endpoints requiring authenticated access via the session dependency (`get_current_authenticated_user`)[cite: 149]. |
-
-### **2. Appointment Routes (`appointment_routes.py`)**
-
-Manages the core patient workflow for booking and real-time consultation triage.
-
-| Method | Endpoint | Description | Key Functionality |
-| :--- | :--- | :--- | :--- |
-| **POST** | `/book-appointment` | Processes a new appointment request. [cite_start]**Fetches the patient's medical record and uses the Gemini API to predict symptom severity** before scheduling the appointment[cite: 114, 115, 119]. |
-| **GET** | `/book-appointment` | Renders the page for booking and viewing existing appointments. [cite_start]Fetches all doctors and the patient's existing appointment list[cite: 98]. |
-| **POST** | `/transcribe` | Receives a patient's audio file. [cite_start]Uses the imported **Faster-Whisper** model to transcribe the audio asynchronously and returns the text transcription[cite: 92, 94]. |
-
-### **3. Profile Route (`profile.py`)**
-
-Retrieves a patient's complete profile and comprehensive medical history.
-
-| Method | Endpoint | Description | Key Functionality |
-| :--- | :--- | :--- | :--- |
-| **GET** | `/me` | Returns the authenticated patient's full details and their **Medical Record**. [cite_start]It dynamically embeds the actual text content of reports by fetching data from the separate `report_contents` collection[cite: 164, 166, 174]. |
