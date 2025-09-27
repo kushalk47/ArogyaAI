@@ -1,13 +1,3 @@
-Got it 👍 Thanks for clarifying!
-So this **Arogya AI** project is a **web application** (not just an API backend).
-
-That means:
-
-* The deployed version serves **HTML templates** (patient registration, booking, doctor dashboards, etc.).
-* API-style endpoints are still part of the code, but in the **web version they render Jinja2 templates**.
-* Instead of running heavy local models (Whisper, Qwen), you used **Gemini API** for LLM-based tasks in deployment.
-
-I’ve rewritten the README accordingly 👇
 
 ---
 
