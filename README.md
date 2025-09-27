@@ -194,13 +194,7 @@ This application integrates a **web interface** (Jinja2 templates) with **Gemini
    * Doctor login: `/doctor/login`
    * Dashboard: `/dashboard`
 
----
 
-✨ With this setup, patients can book appointments and manage records, while doctors can use AI-assisted dashboards powered by Gemini API for efficient consultations.
-
----
-
-Do you also want me to include **sample screenshots (patient booking, doctor dashboard, AI consultation)** section in the README for better presentation?
 
 This entire system is a robust, modern **AI-powered Backend Healthcare Platform** built on the **FastAPI** framework, using **MongoDB** for data storage and leveraging external APIs (**Google Gemini**) and local models (**Faster-Whisper**) for core clinical functionality.
 
